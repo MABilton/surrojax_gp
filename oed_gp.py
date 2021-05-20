@@ -1,10 +1,10 @@
 import jax
 import jax.numpy as jnp
+import jax.scipy.linalg as jlinalg
 
-import math
+from math import pi
 
-import random
-random.seed(1)
+from scipy.optimize import dual_annealing, shgo
 
 # y_train = (num_samples) - learning a single function!
 # x_train.size = (num_samples, num_features)
@@ -14,129 +14,112 @@ random.seed(1)
 class GP_Surrogate:
     def __init__(self, cov, x_train, y_train, constraints):
         
+        # TODO: Check dimensions of x_train and y_train
         self.x_train = x_train
         self.y_train = y_train
-        
+
         # Vectorise covariance function:
-        self.cov_fun = jax.vmap(jax.vmap(cov, in_axes=(0,None,None)), in_axes=(None,0,None))
-        cov_grad = jax.grad(cov, argnums=2)
-        #self.cov_grad_fun = jax.grad(cov, argnums=2)
-        self.cov_grad_fun = jax.vmap(jax.vmap(cov_grad, in_axes=(0,None,None)), in_axes=(None,0,None))
+        cov_fun = jax.vmap(jax.vmap(cov, in_axes=(0,None,None), out_axes=0), in_axes=(None,0,None), out_axes=1)
+        self.cov_fun = lambda x_1, x_2, params : jnp.atleast_1d(cov_fun(x_1, x_2, params).squeeze())
+        
+        # Create function which returns 'noisy' kernel if requested by user:
+        if "noise" in constraints:
+            K_fun = lambda x_1, x_2, params : noisy_K(self.cov_fun, x_1, x_2, params)
+        # Otherwise, add jitter to diagonal of K for numerical stability:
+        else:
+            K_fun = lambda x_1, x_2, params : jitter_K(self.cov_fun, x_1, x_2, params)
+            self.K_fun = K_fun
 
         # Optimise hyperparameters of covariance function:    
-        self.hyperparams = opt_hyperparams(x_train, y_train, self.cov_fun, self.cov_grad_fun, constraints)
+        self.params = opt_hyperparams(x_train, y_train, K_fun, constraints)
 
         # With optimal hyperparameters, compute covariance matrix and inverse covariance matrix:
-        self.cov = cov_fun(x_train, x_train, self.hyperparams)
-        self.inv_cov = jnp.linalg.inv(cov)
-        self.inv_cov_y = self.inv_cov @ y_train
+        self.cov = K_fun(x_train, x_train, self.params)
+        self.L = jnp.linalg.cholesky(self.cov)
+        self.alpha = jnp.linalg.lstsq((self.L).T, jnp.linalg.lstsq(self.L,y_train)[0])[0]
+
+        # Store vectorised prediction function:
+        self.pred_fun = jax.vmap(pred_fun_temp, in_axes=(None, 0))
 
     def predict(self, x_new):
-        return (self.predict_mean(x_new), self.predict_cov(x_new))
+        return self.pred_fun(self, x_new)
 
-    def predict_mean(self, x_new):
-        return self.cov_fun(x_new, self.x_train).T @ self.inv_cov_y
+def pred_fun_temp(obj, x_new):
+    k = obj.cov_fun(x_new, obj.x_train, obj.params)
+    mean = jnp.dot(k,obj.alpha)
+    v = jnp.linalg.lstsq(obj.L, k)[0]
+    var = obj.cov_fun(x_new, x_new, obj.params) - jnp.dot(v.T, v)
+    return (mean, var)
 
-    def predict_cov(self, x_new):
-        cov_new = self.cov_fun(x_new, self.x_train)
-        return self.cov_fun(x_new, x_new) - cov_new.T @ self.inv_cov @ cov_new
+# Calls Scipy Optimise function to tune hyperparameters:
+def opt_hyperparams(x_train, y_train, K_fun, constraints):
+    bounds, idx_2_key = create_bounds(constraints)
+    loss_fun = lambda params : loss(params, x_train, y_train, K_fun, idx_2_key)
+    opt_params = dual_annealing(loss_fun, bounds, no_local_search=True, maxfun=100.0) #shgo(loss_fun, bounds)
+    opt_params = create_param_dict(opt_params["x"], idx_2_key)
+    return opt_params
 
-def opt_hyperparams(x_train, y_train, fun_cov, fun_cov_grad, constraints):
+def loss(params, x_train, y_train, K_fun, idx_2_key):
+    # Convert array of param values into dictionary:
+    params = create_param_dict(params, idx_2_key)
+    # Compute kernel matrix:
+    K = K_fun(x_train, x_train, params)
+    # Cholesky decomposition:
+    L = jnp.linalg.cholesky(K)
+    alpha = jnp.linalg.lstsq(L.T, jnp.linalg.lstsq(L,y_train)[0])[0]
+    n = y_train.shape[0]
+    loss  = 0.5*jnp.dot(y_train.T, alpha) + jnp.sum(jnp.log(jnp.diag(L))) + 0.5*n*jnp.log(2*pi)
+    return loss.ravel()
 
-    # Randomly initialise according to specified constraints:
-    num_repeats = 5
-    num_steps = 1000
-    best_loss_out = math.inf
+def create_param_dict(params, idx_2_key):
+    param_dict = {}
+    for i, value in enumerate(params):
+        param_dict[idx_2_key[i]] = value
+    return param_dict
 
-    for repeat in range(num_repeats):
-        # Randomly initialise hyperparameters (subject to constaints):
-        params = init_params(constraints)
-        # Reinitialise other varaibles:
-        best_loss_in = math.inf
-        grad_hist = []
-        del_hist = []
-        for i in range(num_steps):
-            # Compute covariance-related quantities:
-            cov = fun_cov(x_train, x_train, params)
-            print(cov)
-            cov_inv = jnp.linalg.inv(cov)
-            cov_grad = fun_cov_grad(x_train, x_train, params)
-            #print(cov_grad)
-            # Compute loss function:
-            loss = fun_loss(cov, cov_inv, y_train)
-            for key, value in params.items():
-                grad = fun_grad(cov_inv, cov_grad[key], y_train)
-                grad_hist.append(grad)
-                update, del_hist = rprop(grad_hist, del_hist)
-                new_param = value + update
-                # Project params to closest point which satisfies constraints:
-                params[key] = param_proj(new_param, constraints[key])
-            # Store parameters associated with best loss seen:
-            if loss > best_loss_in:
-                best_loss_in = loss
-                best_params_in = params
-        # Best 
-        if best_loss_in > best_loss_out:
-            best_loss_out = best_loss_in
-            best_params_out = best_params_in
-    return best_params_out
-
-def rprop(grad_hist,del_hist):
-    # Standard Rprop hyperparameter values:
-    eta_p = 1.2
-    eta_m = 0.5
-    del_0 = 0.5
-    del_min = 10**(-6)
-    del_max = 50
-    # If first iteration, set del_t to initial val:
-    if len(grad_hist) == 1:
-        del_t = del_0
-    # If past first iteration, compute update:
-    else:
-        grad_prod = grad_hist[-2]*grad_hist[-1]
-        if grad_prod > 0:
-            del_t = eta_p*del_hist[-1]
-        elif grad_prod < 0:
-            del_t = eta_m*del_hist[-1]
+def create_bounds(constraints):
+    idx_2_key = []
+    lb = []
+    ub = []
+    max_val = 10^5
+    min_val =  -1*max_val
+    for i, (key, value) in enumerate(constraints.items()):
+        idx_2_key.append(key)
+        if value is None:
+            lb.append(min_val)
+            ub.append(max_val)
         else:
-            del_t = del_hist[-1]
-    # Apply gradient limits:
-    update = del_max if del_t > del_max else del_t
-    update = del_min if del_t < del_min else del_t
-    del_hist.append(update)
-    return (update, del_hist)
+            if ">" in value:
+                lb.append(value[">"])  
+            else: 
+                lb.append(min_val)
+            if "<" in value:
+                ub.append(value["<"])  
+            else:
+                ub.append(max_val)
+    bounds = list(zip(lb, ub))
+    return (bounds, idx_2_key)
 
-def param_proj(val, constraint):
-    if constraint is not None:
-        if "<" in constraint:
-            val = constraint["<"] if val > constraint["<"] else val
-        if ">" in constraint:
-            val = constraint[">"] if val < constraint[">"] else val
-    return val
+def noisy_K(cov_fun, x_1, x_2, params):
+    jitter = 10**(-8)
+    K = cov_fun(x_1, x_2, params)
+    return K + (params["noise"] + jitter)*jnp.identity(K.shape[0])
 
-def init_params(constraints):
-    max_val = 100
-    min_val = -1*max_val
-    params = {}
-    for key, value in constraints.items():
-        # Generate random number:
-        rand = random.random()
-        # No constraints applied:
-        if value == None:
-            params[key] = min_val + (max_val - min_val)*rand
-        # Constraints applied:
-        else:
-            con_max = value["<"] if "<" in value else max_val
-            con_min = value[">"] if ">" in value else min_val
-            params[key] = con_min + (con_max - con_min)*rand
-    return params
+def jitter_K(cov_fun, x_1, x_2, params):
+    jitter = 10**(-8)
+    K = cov_fun(x_1, x_2, params)
+    return K + jitter*jnp.identity(K.shape[0])
 
-def fun_loss(cov, cov_inv, y_train):
-    N = cov.shape[0]
-    loss = -0.5*(jnp.log(jnp.linalg.det(cov)) + y_train.T @ cov_inv @ y_train + N*jnp.log(2*math.pi))
-    return loss
+#def noisy_K_grad(cov_grad_fun, x_1, x_2, params):
+    #cov_grad = cov_grad_fun(x_1, x_2, params)
+    #num_samples = min(x_1.shape)
+    #cov_grad["noise"] = jnp.identity(num_samples)
+    #return cov_grad
 
-def fun_grad(cov_inv, cov_grad, y_train):    
-    inv_times_grad = cov_inv @ cov_grad
-    grad = -0.5*(jnp.trace(inv_times_grad) - ((y_train.T @ inv_times_grad) @ cov_inv) @ y_train)
-    return grad
+    # Create function to return derivative of kernel wrt hyperparameters:
+    #cov_grad = jax.grad(cov_fun, argnums=2)
+    #cov_grad_fun = jax.vmap(jax.vmap(cov_grad, in_axes=(0,None,None)), in_axes=(None,0,None))
+    #if "noise" in constraints:
+    #    self.K_grad_fun = lambda x_1, x_2, params : noisy_K_grad(cov_grad_fun, x_1, x_2, params)
+    #else:
+    #    self.K_grad_fun = cov_grad_fun

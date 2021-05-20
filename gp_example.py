@@ -7,22 +7,22 @@ import oed_gp
 def nonlin_model(d, theta):
     return jnp.array([d**2 * theta[:,0]*theta[:,1]]).squeeze()
 
-# Kernel function:
+# Kernel function (w/o noise):
 def cov_fun(x_1, x_2, params):
     theta_1, d_1 = x_1[0:-1], x_1[-1].reshape((1,1))
     theta_2, d_2 = x_2[0:-1], x_2[-1].reshape((1,1))
     # Inner product kernel for theta:
-    theta_k = theta_1.T @ theta_1
+    theta_k = theta_1.T @ theta_2
     # Squared exponential kernel for d:
-    d_dim = 1
-    len_scale = jnp.empty((0,1))
-    for i in range(d_dim):
-        len_scale = jnp.vstack((len_scale,params[f"l_{i}"]))
-    M = jnp.diag(len_scale)
-    d_k = params["sigma_f"]*jnp.exp(-0.5*(d_2 - d_1).T @ M @ (d_2 - d_1))
-    noise_k = jnp.allclose(x_1, x_2)*params["sigma_n"]
+    M = jnp.array(params["l_0"])
+    d_k = params["sigma_f"]*jnp.exp(-0.5*(d_2 - d_1) * M * (d_2 - d_1))
     # Must squeeze to ensure output is of shape (,)
-    return (theta_k + d_k + noise_k).squeeze()
+    return (theta_k + d_k).squeeze()
+
+# Kernel function (w/o noise):
+def cov_fun_1(x_1, x_2, params):
+    # Must squeeze to ensure output is of shape (,)
+    return params["sigma_f"]*jnp.exp(-0.5*(1/params["l"])*(x_2 - x_1).T @ (x_2 - x_1)).squeeze()
 
 if __name__ == "__main__":
     # Generate grid of theta values:
@@ -49,10 +49,17 @@ if __name__ == "__main__":
         x_train = jnp.vstack((x_train, x))
     y_train = jnp.array(y_train)
     y_train = y_train.flatten()
+    num_samples = len(y_train)
+
+    y_train.reshape(y_dim,num_samples)
 
     # Define constraints:
-    constraints = {"sigma_n": {">":10**(-3)}, "sigma_f": {">":10**(-3)}}
-    for i in range(d_dim + y_dim):
-        constraints[f"l_{i}"] = {">":10**(-3)}
-    
-    surrogate = oed_gp.GP_Surrogate(cov_fun, x_train, y_train, constraints)
+    #constraints = {"noise": {">":10**(-3)}, "sigma_f": {">":10**(-3)}, "l_0": {">":10**(-3)}}
+    constraints = {"noise": {">":10**(-3)}, "sigma_f": {">":10**(-3)}, "l": {">":10**(-3)}}
+
+    # Create surrogate:
+    surrogate = oed_gp.GP_Surrogate(cov_fun_1, x_train, y_train, constraints)
+    x_pred = jnp.array([0.1,2.1,0.1]).reshape((1,3))
+    pred = surrogate.predict(x_pred)
+    #print(pred)
+    #print(y_train[0])
