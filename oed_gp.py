@@ -2,11 +2,17 @@ import jax
 import numpy as jnp
 import jax.scipy.linalg as jlinalg
 
-from math import pi
+from nearest_pd import nearestPD
 
-from scipy.spatial.distance import pdist, cdist
-from scipy.linalg import cholesky, cho_solve
-from scipy.optimize import dual_annealing, shgo
+from math import pi, inf
+
+import numpy as np
+
+from gp_func_factory import create_cov_diag_func, create_matrix_func, create_noisy_cov_func, create_kernel_grad_func
+
+from scipy.spatial.distance import pdist, cdist, squareform
+from scipy.linalg import cholesky, cho_solve, solve_triangular
+from scipy.optimize import minimize
 
 # y_train = (num_samples) - learning a single function!
 # x_train.size = (num_samples, num_features)
@@ -14,57 +20,98 @@ from scipy.optimize import dual_annealing, shgo
 # Constraints of the form: {"a":None, "b":{"<":1, ">":-1}, "c":None, "d":{"<":10}}
 
 class GP_Surrogate:
-    def __init__(self, cov, x_train, y_train, constraints):
+    def __init__(self, kernel_func, x_train, y_train, constraints):
         
         # TODO: Check dimensions of x_train and y_train
         self.x_train = x_train
         self.y_train = y_train
+    
+        # Create functions to compute covariance matrix:
+        self.cov_func = create_matrix_func(kernel_func, (0,None,None), (None,0,None))
 
-        # Vectorise covariance function:
-        self.cov_fun = lambda x_1, x_2, params : cdist(x_1, x_2, lambda x, y, params=params : cov(x, y, params))
+        # Create function which adds noise or jitter to covariance matrix:
+        noise_flag = True if "noise" in constraints else False
+        noisy_cov_func = create_noisy_cov_func(self.cov_func, noise_flag)
 
-        # Create function which returns 'noisy' kernel if requested by user:
-        if "noise" in constraints:
-            K_fun = lambda x_1, x_2, params : noisy_K(self.cov_fun, x_1, x_2, params, noise_flag=True)
-        # Otherwise, add jitter to diagonal of K for numerical stability:
-        else:
-            K_fun = lambda x_1, x_2, params : noisy_K(self.cov_fun, x_1, x_2, params)
-        self.K_fun = K_fun
-
+        # Create functions to compute gradient of covariance matrix wrt hyperparameters:
+        param_names = list(constraints.keys())
+        in_axes_inner = [0 if x == 0 else None for x in range(len(param_names)+2)]
+        in_axes_outer = [0 if x == 1 else None for x in range(len(param_names)+2)]
+        grad_funcs = {}
+        for i, name in enumerate(param_names):
+            if name != "noise":
+                kernel_grad_func = create_kernel_grad_func(kernel_func, param_names, i)
+                grad_funcs[name] = create_matrix_func(kernel_grad_func, in_axes_inner, in_axes_outer)
+            else:
+                grad_funcs[name] = lambda x, y, *params : jnp.identity(x.shape[0])
+        
         # Optimise hyperparameters of covariance function:    
-        self.params = opt_hyperparams(x_train, y_train, K_fun, constraints)
+        #self.params = opt_hyperparams(x_train, y_train, noisy_cov_func, grad_funcs, constraints)
+        self.params = {"const":1., "length":1., "noise":1.}
 
         # With optimal hyperparameters, compute covariance matrix and inverse covariance matrix:
-        train_cov = K_fun(x_train, x_train, self.params)
-        self.L = cholesky(train_cov)
-        self.alpha = jnp.linalg.lstsq((self.L).T, jnp.linalg.lstsq(self.L, y_train, rcond=None)[0], rcond=None)[0]
+        train_K = noisy_cov_func(x_train, x_train, self.params)
+        self.L = chol_decomp(train_K)
+        self.alpha = cho_solve((self.L, True), y_train)
+        self.cov_diag_func = create_cov_diag_func(kernel_func, noise_flag)
 
     def predict(self, x_new):
         x_new = jnp.atleast_2d(x_new)
-        k = self.cov_fun(self.x_train, x_new, self.params)
+        k = self.cov_func(self.x_train, x_new, self.params)
         mean = k.T @ self.alpha 
-        v = jnp.linalg.lstsq(self.L, k, rcond=None)[0]
-        var = jnp.diag(self.cov_fun(x_new, x_new, self.params)) -  jnp.sum(v*v, axis=0, keepdims=True)
-        return (mean, var.T)
+        v = solve_triangular(self.L, k, lower=True)
+        var = self.cov_diag_func(x_new, x_new, self.params) -  jnp.sum(v*v, axis=0, keepdims=True)
+        return (mean.squeeze(), var.squeeze())
+
+    # Able to be grad'd - TODO:
+    def predict_mean():
+        pass
+    # Able to be grad'd - TODO:
+    def predict_var():
+        pass
 
 # Calls Scipy Optimise function to tune hyperparameters:
-def opt_hyperparams(x_train, y_train, K_fun, constraints):
-    bounds, idx_2_key = create_bounds(constraints)
-    loss_fun = lambda params : loss(params, x_train, y_train, K_fun, idx_2_key)
-    opt_params = dual_annealing(loss_fun, bounds, no_local_search=True, maxfun=100.0) #shgo(loss_fun, bounds)
-    opt_params = create_param_dict(opt_params["x"], idx_2_key)
+def opt_hyperparams(x_train, y_train, K_fun, K_grad_fun, constraints, num_repeats = 5):
+    bounds, bounds_array, idx_2_key = create_bounds(constraints)
+    best_loss = inf
+    loss_func = lambda params : loss_func_template(params, x_train, y_train, K_fun, idx_2_key)
+    loss_grad_func = lambda params : loss_grad_func_template(params, x_train, y_train, K_fun, K_grad_fun, idx_2_key)
+    for i in range(num_repeats):
+        rand_vec = np.random.rand(bounds_array.shape[1])
+        x_0 = bounds_array[0,:] + (bounds_array[1,:] - bounds_array[0,:])*rand_vec
+        opt_result =  minimize(loss_func, x_0, method='L-BFGS-B', jac=loss_grad_func, bounds=bounds) 
+        print(opt_result)
+        if opt_result["fun"] < best_loss:
+            best_loss = opt_result["fun"]
+            best_params = opt_result["x"]
+    opt_params = create_param_dict(best_params, idx_2_key)
     return opt_params
 
-def loss(params, x_train, y_train, K_fun, idx_2_key):
+def loss_grad_func_template(params, x_train, y_train, K_fun, K_grad_fun, idx_2_key):
+    # Convert array of param values into dictionary:
+    param_dict = create_param_dict(params, idx_2_key)
+    # Iterate over hyperparameters:
+    K = K_fun(x_train, x_train, param_dict)
+    L = chol_decomp(K)
+    alpha = cho_solve((L, True), y_train)
+    alpha_dot = alpha.T @ alpha
+    loss_grad = []
+    for key in param_dict.keys():
+        K_grad = K_grad_fun[key](x_train, x_train, *params)
+        loss_grad.append(-0.5*(alpha_dot - jnp.trace(cho_solve((L, True), K_grad))))
+    return loss_grad
+
+def loss_func_template(params, x_train, y_train, K_fun, idx_2_key):
     # Convert array of param values into dictionary:
     params = create_param_dict(params, idx_2_key)
     # Compute kernel matrix:
     K = K_fun(x_train, x_train, params)
     # Cholesky decomposition:
-    L = jnp.linalg.cholesky(K)
-    alpha = jnp.linalg.lstsq(L.T, jnp.linalg.lstsq(L,y_train,rcond=None)[0],rcond=None)[0]
-    n = y_train.shape[0]
-    loss  = 0.5*jnp.dot(y_train.T, alpha) + jnp.sum(jnp.log(jnp.diag(L))) + 0.5*n*jnp.log(2*pi)
+    L = chol_decomp(K)
+    alpha = cho_solve((L, True), y_train)
+    #n = y_train.shape[0]
+    loss  = 0.5*y_train.T @ alpha + (jnp.log(jnp.diag(L))).sum() 
+    print(loss)
     return loss.ravel()
 
 def create_param_dict(params, idx_2_key):
@@ -74,10 +121,8 @@ def create_param_dict(params, idx_2_key):
     return param_dict
 
 def create_bounds(constraints):
-    idx_2_key = []
-    lb = []
-    ub = []
-    max_val = 10^5
+    idx_2_key, lb, ub = [], [], []
+    max_val = 10^2
     min_val =  -1*max_val
     for i, (key, value) in enumerate(constraints.items()):
         idx_2_key.append(key)
@@ -85,34 +130,16 @@ def create_bounds(constraints):
             lb.append(min_val)
             ub.append(max_val)
         else:
-            if ">" in value:
-                lb.append(value[">"])  
-            else: 
-                lb.append(min_val)
-            if "<" in value:
-                ub.append(value["<"])  
-            else:
-                ub.append(max_val)
-    bounds = list(zip(lb, ub))
-    return (bounds, idx_2_key)
+            if ">" in value: lb.append(value[">"])  
+            else: lb.append(min_val)
+            if "<" in value: ub.append(value["<"])  
+            else: ub.append(max_val)
+    bounds, bounds_array = list(zip(lb, ub)), jnp.array([lb, ub])
+    return (bounds, bounds_array, idx_2_key)
 
-def noisy_K(cov_fun, x_1, x_2, params, noise_flag=False):
-    jitter = 10**(-10)
-    K = cov_fun(x_1, x_2, params)
-    K[jnp.diag_indices_from(K)] += jitter
-    if noise_flag: K[jnp.diag_indices_from(K)] += params["noise"] 
-    return K
-
-#def noisy_K_grad(cov_grad_fun, x_1, x_2, params):
-    #cov_grad = cov_grad_fun(x_1, x_2, params)
-    #num_samples = min(x_1.shape)
-    #cov_grad["noise"] = jnp.identity(num_samples)
-    #return cov_grad
-
-    # Create function to return derivative of kernel wrt hyperparameters:
-    #cov_grad = jax.grad(cov_fun, argnums=2)
-    #cov_grad_fun = jax.vmap(jax.vmap(cov_grad, in_axes=(0,None,None)), in_axes=(None,0,None))
-    #if "noise" in constraints:
-    #    self.K_grad_fun = lambda x_1, x_2, params : noisy_K_grad(cov_grad_fun, x_1, x_2, params)
-    #else:
-    #    self.K_grad_fun = cov_grad_fun
+def chol_decomp(A):
+    try:
+        L = cholesky(A, lower=True)
+    except:
+        L = cholesky(nearestPD(A), lower=True)
+    return L
