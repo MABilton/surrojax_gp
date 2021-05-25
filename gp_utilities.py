@@ -1,5 +1,16 @@
 import jax
 import jax.numpy as jnp
+from nearest_pd import nearestPD
+from scipy.linalg import cholesky
+
+def create_unpacked_kernel_func(kernel_func, param_names):
+    def unpacked_kernel(x, y, *params):
+        param_dict = {}
+        for i, value in enumerate(params):
+            param_dict[param_names[i]] = value
+        kernel_val = kernel_func(x, y, param_dict)
+        return kernel_val
+    return unpacked_kernel
 
 def create_kernel_grad_func(kernel_func, param_names, d_idx):
     def kernel_func_to_grad(x, y, *params):
@@ -33,3 +44,10 @@ def create_cov_diag_func(kernel_func, noise_flag):
     def vectorised_kernel_func(x_1, x_2, params):
         return jnp.atleast_2d(vectorised_kernel(x_1, x_2, params).squeeze())
     return vectorised_kernel_func
+
+def chol_decomp(A):
+    try:
+        L = cholesky(A, lower=True)
+    except:
+        L = cholesky(nearestPD(A), lower=True)
+    return L
