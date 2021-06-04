@@ -18,7 +18,7 @@ from math import pi
 
 class GP_Surrogate:
     def __init__(self, kernel_func, x_train, y_train, constraints):
-        
+
         # TODO: Check dimensions of x_train and y_train
         self.x_train = x_train
         self.y_train = y_train
@@ -41,7 +41,6 @@ class GP_Surrogate:
                 grad_funcs[name] = create_matrix_func(kernel_grad_func, in_axes_inner, in_axes_outer)
             else:
                 grad_funcs[name] = lambda x, y, *params : jnp.identity(x.shape[0])
-
         # Optimise hyperparameters of covariance function:    
         self.params = opt_hyperparams(x_train, y_train, noisy_cov_func, grad_funcs, constraints)
 
