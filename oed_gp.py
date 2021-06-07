@@ -50,10 +50,11 @@ class GP_Surrogate:
         self.alpha = cho_solve((self.L, True), y_train)
         self.cov_diag_func = create_cov_diag_func(kernel_func, noise_flag)
 
-    def predict(self, x_new):
+    def predict(self, x_new, min_var=10**(-9)):
         x_new = jnp.atleast_2d(x_new)
         k = self.cov_func(self.x_train, x_new, self.params)
         mean = k.T @ self.alpha 
         v = solve_triangular(self.L, k, lower=True)
         var = self.cov_diag_func(x_new, x_new, self.params) -  jnp.sum(v*v, axis=0, keepdims=True)
+        var = jax.ops.index_update(var, var<min_var, min_var)
         return (mean.squeeze(), var.squeeze())

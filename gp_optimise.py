@@ -12,7 +12,7 @@ from scipy.optimize import minimize, dual_annealing, shgo
 from gp_utilities import chol_decomp
 
 # Calls Scipy Optimise function to tune hyperparameters:
-def opt_hyperparams(x_train, y_train, K_fun, K_grad_fun, constraints, num_repeats = 3):
+def opt_hyperparams(x_train, y_train, K_fun, K_grad_fun, constraints, num_repeats = 9):
     bounds, bounds_array, idx_2_key = create_bounds(constraints)
     best_loss = inf
     loss_and_grad = lambda params : loss_and_grad_func_template(params, x_train, y_train, K_fun, K_grad_fun, idx_2_key)
