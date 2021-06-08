@@ -16,10 +16,15 @@ class LinearisedModel:
         self.w_surrogate = GP_Surrogate(kernel, training_d, training_w[:,0], kernel_constraints)
         self.b_surrogate = GP_Surrogate(kernel, training_d, training_w[:,1], kernel_constraints)
 
-    def predict_w(self, d):
+    def predict_weights(self, d):
         w = self.w_surrogate.predict(d)
         b = self.b_surrogate.predict(d)
         return (w, b)
+
+    def predict_pt(self, theta, d):
+        w = self.w_surrogate.predict(d)
+        b = self.b_surrogate.predict(d)
+        return w @ theta + b
 
 def linearise_data(x, y, dim_2_lin, intercept_flag, epsilon = 10**(-3)):
     # Ensure x.shape = (num_samples, num_features) and y.shape = (num_samples, num_targets)
