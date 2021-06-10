@@ -8,18 +8,23 @@ import jax.scipy.linalg as jlinalg
 import jax.numpy as jnp
 
 class LinearisedModel:
-    def __init__(self, x, y, dim_2_lin, kernel, kernel_constraints, intercept_flag=True):
+    def __init__(self, x, y, dim_2_lin, kernel, constraints, ln_diag_constraints, intercept_flag=True):
         self.dim_2_lin = dim_2_lin
         # Linearise data:
-        training_d, training_w, diag_list, off_diag_list = linearise_data(x, y, dim_2_lin, intercept_flag)
+        self.training_d, self.training_w, self.diag_list, off_diag_list = linearise_data(x, y, dim_2_lin, intercept_flag)
         # Create GP surrogate with training data:
-        self.w_surrogate = GP_Surrogate(kernel, training_d, training_w[:,0], kernel_constraints)
-        self.b_surrogate = GP_Surrogate(kernel, training_d, training_w[:,1], kernel_constraints)
+        self.w_surrogate = GP_Surrogate(kernel, self.training_d, self.training_w[:,0], constraints)
+        self.b_surrogate = GP_Surrogate(kernel, self.training_d, self.training_w[:,1], constraints)
+        self.ln_diag_surrogate = GP_Surrogate(kernel, self.training_d, jnp.log(self.diag_list), ln_diag_constraints) # Assumed only one entry
 
     def predict_weights(self, d):
         w = self.w_surrogate.predict(d)
         b = self.b_surrogate.predict(d)
         return (w, b)
+
+    def predict_ln_diag(self, d):
+        ln_diag = self.ln_diag_surrogate.predict(d)[0]
+        return ln_diag
 
     def predict_pt(self, theta, d):
         w = self.w_surrogate.predict(d)
@@ -46,11 +51,16 @@ def linearise_data(x, y, dim_2_lin, intercept_flag, epsilon = 10**(-3)):
     nl_diff  = jnp.diff(x[:,0:nl_end],n=1,axis=0)
     nl_change_idx = jnp.sum(nl_diff > epsilon, axis=1)
     nl_change_idx = jnp.nonzero(nl_change_idx)[0] + 1
-    num_d = len(nl_change_idx)
+    num_d = len(nl_change_idx) + 1
     #
     nl_list, w_list, diag_list, off_diag_list = [], [], [], []
-    for i, idx in enumerate(nl_change_idx):
-        fit_idx = (nl_change_idx[i-1],idx) if i != 0 else (0,idx)
+    for i in range(num_d):
+        if i == 0:
+            fit_idx = [0, nl_change_idx[i]]
+        elif i == (num_d-1):
+            fit_idx = [nl_change_idx[i-1], x.shape[0]]
+        else:
+            fit_idx = [nl_change_idx[i-1], nl_change_idx[i]]
         current_lin = x[fit_idx[0]:fit_idx[1],nl_end:]
         current_w, current_cov = bayesian_lr(current_lin, y[fit_idx[0]:fit_idx[1],:])
         nl_list.append(x[fit_idx[0],0:nl_end])
