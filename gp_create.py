@@ -3,10 +3,10 @@ import jax.numpy as jnp
 
 import numpy as np
 
-from gp_utilities import chol_decomp, create_noisy_K, create_kernel_matrix_func, create_cov_diag_func
+from gp_utilities import chol_decomp, create_noisy_K, create_kernel_matrix_func, compute_L_and_alpha, create_cov_diag_func
 from gp_optimise import opt_hyperparams
 
-from scipy.linalg import cho_solve, solve_triangular
+from scipy.linalg import solve_triangular
 
 from math import pi
 
@@ -27,18 +27,16 @@ class GP_Surrogate:
 
         # Create function which adds noise or jitter to covariance matrix:
         noise_flag = True if "noise" in constraints else False
-        noisy_K = create_noisy_K(self.K, noise_flag)
+        noisy_K = jax.jit(create_noisy_K(self.K, noise_flag))
         
         # Create functions to compute gradient of covariance matrix wrt hyperparameters:
-        grad_funcs = jax.jacrev(noisy_K, argnums=2)
+        grad_funcs = jax.jit(jax.jacrev(noisy_K, argnums=2))
 
         # Optimise hyperparameters of covariance function:    
         self.params = opt_hyperparams(x_train, y_train, noisy_K, grad_funcs, constraints)
 
         # With optimal hyperparameters, compute covariance matrix and inverse covariance matrix:
-        train_K = noisy_K(x_train, x_train, self.params)
-        self.L = chol_decomp(train_K)
-        self.alpha = cho_solve((self.L, True), y_train)
+        self.L, self.alpha = compute_L_and_alpha(noisy_K, self.x_train, self.y_train, self.params)
         self.cov_diag_func = create_cov_diag_func(kernel_func)
 
     def predict(self, x_new, min_var=10**(-9)):

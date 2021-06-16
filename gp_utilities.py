@@ -1,7 +1,13 @@
 import jax
 import jax.numpy as jnp
 from nearest_pd import nearestPD
-from scipy.linalg import cholesky
+from scipy.linalg import cholesky, cho_solve
+
+def compute_L_and_alpha(noisy_K, x_train, y_train, params):
+    train_K = noisy_K(x_train, x_train, params)
+    L = chol_decomp(train_K)
+    alpha = cho_solve((L, True), y_train)
+    return (L, alpha)
 
 def create_noisy_K(cov_func, noise_flag):
     jitter = 10**(-9)

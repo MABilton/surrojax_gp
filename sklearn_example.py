@@ -2,7 +2,7 @@ import jax.numpy as jnp
 
 import numpy as np
 
-import oed_gp
+import gp_create
 
 import random 
 
@@ -30,7 +30,7 @@ if __name__ == "__main__":
     Y = Y.reshape(len(Y),1)
     x =  jnp.atleast_2d(jnp.linspace(0, 10, 1000)).T
     constraints = {"const": {">": 10**(-3)}, "length": {">": 10**(-1)}} # "noise":None
-    surrogate = oed_gp.GP_Surrogate(kernel, X, Y, constraints)
+    surrogate = gp_create.GP_Surrogate(kernel, X, Y, constraints)
     y = surrogate.predict(x)
     # Plotting: 
     fig = plt.figure()
@@ -65,7 +65,7 @@ if __name__ == "__main__":
     noise = np.random.normal(0, dy)
     Y += noise
     constraints = {"const": {">": 10**(-3)}, "length": {">": 10**(-1)}, "noise":{">":10**(-3)}} 
-    surrogate = oed_gp.GP_Surrogate(kernel, X, Y, constraints)
+    surrogate = gp_create.GP_Surrogate(kernel, X, Y, constraints)
     x =  jnp.atleast_2d(jnp.linspace(0, 10, 1000)).T
     y = surrogate.predict(x)
     # Plot the function, the prediction and the 95% confidence interval based on

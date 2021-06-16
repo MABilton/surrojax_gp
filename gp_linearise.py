@@ -1,5 +1,5 @@
 
-from oed_gp import GP_Surrogate
+from gp_create import GP_Surrogate
 from gp_utilities import chol_decomp
 
 from math import factorial
