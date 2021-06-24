@@ -1,21 +1,22 @@
 import jax
 import jax.numpy as jnp
-
 import numpy as np
-
 from math import pi, inf
-
 from scipy.linalg import cho_solve
-from scipy.optimize import minimize, dual_annealing, shgo
+from scipy.optimize import minimize
 
 from gp_utilities import chol_decomp
 
+# For reproducability, set random seed:
+np.random.seed(2)
+
 # Calls Scipy Optimise function to tune hyperparameters:
-def opt_hyperparams(x_train, y_train, K_fun, K_grad_fun, constraints, num_repeats = 3):
+def fit_hyperparameters(x_train, y_train, noisy_K, constraints, num_repeats=9):
+    # Create functions to compute gradient of covariance matrix wrt hyperparameters:
+    K_grad_fun = jax.jit(jax.jacfwd(noisy_K, argnums=2)) 
     bounds, bounds_array, idx_2_key = create_bounds(constraints)
     best_loss = inf
-    loss_and_grad = lambda params : loss_and_grad_func_template(params, x_train, y_train, K_fun, K_grad_fun, idx_2_key)
-    #loss_and_grad = lambda params : loss_and_grad_func_template(params, x_train, y_train, K_fun, K_grad_fun, idx_2_key)[0]
+    loss_and_grad = lambda params : loss_and_grad_func_template(params, x_train, y_train, noisy_K, K_grad_fun, idx_2_key)
     for i in range(num_repeats):
         rand_vec = np.random.rand(bounds_array.shape[1])
         x_0 = bounds_array[0,:] + (bounds_array[1,:] - bounds_array[0,:])*rand_vec
@@ -38,10 +39,8 @@ def loss_and_grad_func_template(params, x_train, y_train, K_fun, K_grad_fun, idx
     K_grad_vals = K_grad_fun(x_train, x_train, param_dict)
     loss_grad = []
     for key in param_dict.keys():
-        #K_grad = K_grad_fun[key](x_train, x_train, *params)
-        #loss_grad.append(-0.5*jnp.trace(alpha_outer @ K_grad - cho_solve((L, True), K_grad)))
         loss_grad.append(-0.5*jnp.trace(alpha_outer @ K_grad_vals[key] - cho_solve((L, True), K_grad_vals[key])))
-    loss  = 0.5*y_train.T @ alpha + jnp.log(jnp.diag(L)).sum() + (K.shape[0]/2)*jnp.log(2*pi)
+    loss = 0.5*y_train.T @ alpha + jnp.log(jnp.diag(L)).sum() + (K.shape[0]/2)*jnp.log(2*pi)
     loss, loss_grad = np.array(loss, dtype=np.float64).ravel(), np.array(loss_grad, dtype=np.float64).squeeze()
     print(loss)
     return (loss, loss_grad)

@@ -1,49 +1,73 @@
-import jax
+import json
 import jax.numpy as jnp
+from gp_class import GP_Surrogate
 
-import numpy as np
+def create_gp(kernel_func, x_train, y_train, constraints):
+    # Create dictionary which stores all user-provided information:
+    create_dict = {"kernel": kernel_func,
+                   "kernel_name": kernel_func.__name__,
+                   "kernel_file": kernel_func.__globals__['__file__'][:-3],
+                   "x_train": x_train,
+                   "y_train": y_train,
+                   "constraints": constraints}
+    # Create Gaussian process:
+    GP = GP_Surrogate(create_dict)
+    return GP
 
-from gp_utilities import chol_decomp, create_noisy_K, create_kernel_matrix_func, compute_L_and_alpha, create_cov_diag_func
-from gp_optimise import opt_hyperparams
+def load_gp(json_dir):
+    # Attempt to load JSON file:
+    try:
+        with open(json_dir, "r") as json_file:
+            loaded_json = json.load(json_file)
+    except:
+        print(f"Unable to load the file {json_dir}")
+    # Convert relevant attributes to jax.numpy arrays:
+    loaded_json = json_2_jnp(loaded_json)
+    # Load kernel function specified in JSON file:
+    kernel = getattr(__import__(loaded_json["kernel_file"]), loaded_json["kernel_name"])
+    loaded_json["kernel"] = kernel
+    # Create Gaussian process from loaded data:
+    GP = GP_Surrogate(loaded_json)
+    return GP
 
-from scipy.linalg import solve_triangular
+def save_gp(GP_obj, save_dir, save_params=True, save_L_and_alpha=True):
+    # Place information to be saved into a dictionary:
+    vals_2_save = {"kernel_file": GP_obj.kernel_file,
+                   "kernel_name": GP_obj.kernel_name,
+                   "x_train": GP_obj.x_train,
+                   "y_train": GP_obj.y_train,
+                   "constraints": GP_obj.constraints}
+    if save_params:
+        vals_2_save["params"] = GP_obj.params 
+    if save_L_and_alpha:
+        vals_2_save["L"] = GP_obj.L
+        vals_2_save["alpha"] = GP_obj.alpha
+    # Convert relevant values to JSON-saveable format:
+    vals_2_save = jnp_2_json(vals_2_save)
+    # Save dictionary as JSON file:
+    if save_dir[-5:] != ".json":
+        save_dir += ".json"
+    # try:
+    with open(save_dir, 'w') as f:
+        json.dump(vals_2_save, f)
+    # except:
+    #     print("Unable to save JSON file.")
+    return 0
 
-from math import pi
+# Converts relevant GP attributes from Jax.numpy arrays (which cannot be saved into JSON files)
+# to lists (which can be saved into JSON files):
+def jnp_2_json(save_dict):
+    for key in (set(save_dict.keys()) & {"x_train", "y_train", "L", "alpha"}):
+        save_dict[key] = save_dict[key].tolist()
+    if "params" in save_dict:
+        save_dict["params"] = {key: value.tolist() for (key, value) in save_dict["params"].items()}
+    return save_dict
 
-# y_train = (num_samples) - learning a single function!
-# x_train.size = (num_samples, num_features)
-# Constraints of the form: {"a":None, "b":{"<":1, ">":-1}, "c":None, "d":{"<":10}}
-
-class GP_Surrogate:
-    def __init__(self, kernel_func, x_train, y_train, constraints):
-
-        # TODO: Check dimensions of x_train and y_train
-        self.kernel = kernel_func
-        self.x_train = x_train
-        self.y_train = y_train
-    
-        # Create functions to compute covariance matrix:
-        self.K = create_kernel_matrix_func(kernel_func)
-
-        # Create function which adds noise or jitter to covariance matrix:
-        noise_flag = True if "noise" in constraints else False
-        noisy_K = jax.jit(create_noisy_K(self.K, noise_flag))
-        
-        # Create functions to compute gradient of covariance matrix wrt hyperparameters:
-        grad_funcs = jax.jit(jax.jacrev(noisy_K, argnums=2))
-
-        # Optimise hyperparameters of covariance function:    
-        self.params = opt_hyperparams(x_train, y_train, noisy_K, grad_funcs, constraints)
-
-        # With optimal hyperparameters, compute covariance matrix and inverse covariance matrix:
-        self.L, self.alpha = compute_L_and_alpha(noisy_K, self.x_train, self.y_train, self.params)
-        self.cov_diag_func = create_cov_diag_func(kernel_func)
-
-    def predict(self, x_new, min_var=10**(-9)):
-        x_new = jnp.atleast_2d(x_new)
-        k = self.K(self.x_train, x_new, self.params)
-        mean = k.T @ self.alpha 
-        v = solve_triangular(self.L, k, lower=True)
-        var = self.cov_diag_func(x_new, x_new, self.params) -  jnp.sum(v*v, axis=0, keepdims=True)
-        var = jax.ops.index_update(var, var<min_var, min_var)
-        return (mean.squeeze(), var.squeeze())
+# Converts relevant attributes into Jax.numpy arrays:
+def json_2_jnp(json_dict):
+    # Convert al
+    for key in (set(json_dict.keys()) & {"x_train", "y_train", "L", "alpha"}):
+        json_dict[key] = jnp.array(json_dict[key])
+    if "params" in json_dict:
+        json_dict["params"] = {key: jnp.array(value) for (key, value) in json_dict["params"].items()}
+    return json_dict

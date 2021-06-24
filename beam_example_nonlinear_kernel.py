@@ -1,89 +1,68 @@
 import numpy as np
 import jax.numpy as jnp
-
-import gp_create
-
 import matplotlib.pyplot as plt
 
-import pickle
+from gp_create import create_gp, save_gp, load_gp
 
 def kernel(x_1, x_2, params):
-    # Dot product kernel for theta (i.e. linearise in terms of theta = c10);
-    # Squared exponential kernel for d (i.e. non-linear in terms of angle, x, y and z):
     lengths = jnp.array([params[f"length_{i}"] for i in range(2)])
     inv_lengths = jnp.diag(lengths**(-1))
-    ln_k_d = -0.5*(x_1 - x_2).T @ inv_lengths @ (x_1 - x_2)
-    k_d = params["const"]*jnp.exp(ln_k_d)
-    return k_d
+    ln_k_d = -0.5*(x_1 - x_2).T @ inv_lengths @ (x_1 - x_2) 
+    return params["const"]*jnp.exp(ln_k_d)
 
-# # Kernel if we include x, y and z:
-# def kernel(x_1, x_2, params):
-#     # Dot product kernel for theta (i.e. linearise in terms of theta = c10);
-#     # Squared exponential kernel for d (i.e. non-linear in terms of angle, x, y and z):
-#     ln_k_d = -0.5*jnp.dot((x_1 - x_2), (x_1 - x_2))/params["length"]
-#     return params["const"]*jnp.exp(ln_k_d)
-
-if __name__ == "__main__":
+def load_data(data_dir):
     # Import data from text file:
-    training_data = np.loadtxt("beam_data_one_pt.txt")
+    training_data = np.loadtxt(data_dir)
     # Note that columns of beam data arranged as: [angle, c10, disp]
     # Rearrange to form: [c10, angle, x, y, z, disp]:
     training_data.T[[0,1]] = training_data.T[[1,0]]
-
     # Convert to Jax.numpy array:
-    training_x = jnp.array(training_data[:,0:-1])
-    training_y = training_data[:,-1]
+    x_train = jnp.array(training_data[:,0:-1])
+    y_train = jnp.array(training_data[:,-1])
+    return (x_train, y_train)
 
-    #constraints = {f"length_{i}": {">": 10**(-1)} for i in range(3)}
-    #constraints = {"length": {">": 10**(-1), "<": 10**(2)}, "const": {">": 10**(-3), "<": 10**(5)}}
-    constraints = {"length_0": {">": 10**(-1), "<": 10**(2)}, "length_1": {">": 10**(-1), "<": 10**(3)}, "const": {">": 10**(-1), "<": 10**(5)}}
-    surrogate = gp_create.GP_Surrogate(kernel, training_x, training_y, constraints)
-    
-    # Make predictions:
-    d_pts = 1000
-    theta_pts = 1000
-    x_d = jnp.linspace(0, 180, d_pts)
-    x_theta = jnp.linspace(0.1, 5, d_pts)
-    x_1, x_2 = jnp.meshgrid(x_theta, x_d)
-    x = jnp.vstack((x_1.flatten(), x_2.flatten())).T
-    y = surrogate.predict(x)
+def plot_gp_surface(d_pts, theta_pts, y_pts, save_name="plot.png"):
+    # Check if supplied save name has .png extension:
+    if save_name[-4:] != ".png":
+        save_name += ".png"
+    # Create surface plot:
+    fig, ax = plt.subplots()
+    contour_fig = ax.contourf(theta_pts, d_pts, y_pts, cmap='viridis')
+    cbar = fig.colorbar(contour_fig)
+    ax.set_xlabel('Beam stiffness c10')
+    ax.set_ylabel('Angle of Beam in Degrees')
+    cbar.set_label('Displacement', rotation=270, labelpad=15)
+    # Save image of plot:
+    fig.savefig(save_name, dpi=300)
 
-    # Plot 2D slice along c10 axis:
-    plt_idx = 5
-    plt.figure()
-    mean_plot = jnp.atleast_1d(y[0].reshape(d_pts,theta_pts)[plt_idx,:])
-    # std_plot = jnp.atleast_2d(jnp.sqrt(y[1].reshape(d_pts,theta_pts)[:,plt_idx]))
-    x_plot = jnp.atleast_1d(x_1[plt_idx,:])
-    plt.plot(x_plot, mean_plot, 'b-', label='Prediction')
-    # plt.fill(np.concatenate([x_plot, x_plot[::-1]]), \
-    #         np.concatenate([mean_plot - 1.9600 * std_plot, \
-    #                         mean_plot + 1.9600 * std_plot[::-1]]), \
-    #         alpha=.5, fc='b', ec='None', label='95% confidence interval')
-    plt.legend(loc='upper left')
-    plt.savefig('beam_example_mean_slice_2.png', dpi=600)
+if __name__ == "__main__":
+    # Load training data:
+    data_dir = "beam_data_one_pt.txt"
+    x_train, y_train =  load_data(data_dir)
+    constraints = {"length_0": {">": 10**-1, "<": 10**3}, 
+                   "length_1": {">": 10**-1, "<": 10**3}, 
+                   "const": {">": 10**-1, "<": 10**4}}
+    surrogate = create_gp(kernel, x_train, y_train, constraints)
 
-    # Plot mean predictions:
-    fig = plt.figure()
-    ax = plt.axes(projection='3d')
-    ax.plot_surface(x_1, x_2, (y[0]).reshape(d_pts,theta_pts),cmap='viridis', edgecolor='none')
-    ax.set_xlabel("c10")
-    ax.set_ylabel("Angle in Degrees")
-    ax.set_zlabel("Mean Displacement")
-    plt.savefig('beam_example_mean_2.png', dpi=600)
+    # Plot surrogate model surface:
+    d_pts, theta_pts = jnp.linspace(0, 5, 1000), jnp.linspace(0, 180, 1000)
+    d_grid, theta_grid = jnp.meshgrid(theta_pts, d_pts)
+    x = jnp.vstack((theta_grid.flatten(), d_grid.flatten())).T
+    y_pts = surrogate.predict_mean(x)
+    y_grid = y_pts.reshape(d_pts.size,theta_pts.size)
+    plot_gp_surface(d_grid, theta_grid, y_grid, save_name="nonlinear_kernel")
 
-    # Plot resulting variance predictions:
-    fig = plt.figure()
-    ax = plt.axes(projection='3d')
-    ax.plot_surface(x_1, x_2, y[1].reshape(d_pts,theta_pts),cmap='viridis', edgecolor='none')
-    ax.set_xlabel("c10")
-    ax.set_ylabel("Angle in Degrees")
-    ax.set_zlabel("Variance in Displacement")
-    plt.savefig('beam_example_variance_2.png', dpi=600)
+    # Plot surface of training data:
+    d_pts, theta_pts, y_pts = x_train[:,1], x_train[:,0], y_train
+    theta_grid, d_grid, y_grid = theta_pts.reshape(10,10), d_pts.reshape(10,10), y_pts.reshape(10,10)      
+    plot_gp_surface(d_grid, theta_grid, y_grid, save_name="training_data")
 
-    # Save Gaussian process model to Pickle file:
-    with open("nonlin_beam_gp.pkl", 'wb') as f: 
-        # Can't save entire object since vmap'd functions can't be saved:
-        dict_2_save = {"x_train": surrogate.x_train, "y_train": surrogate.y_train, "params": surrogate.params, \
-            "L": surrogate.L, "alpha": surrogate.alpha}
-        pickle.dump(dict_2_save, f)
+    # Save Gaussian process model:
+    save_gp(surrogate, "nonlinear_kernel_gp")
 
+    # Attempt to reload GP model:
+    loaded_gp = load_gp("nonlinear_kernel_gp.json")
+    # Check to make sure predictions are the same as before:
+    loaded_y_pt = loaded_gp.predict_mean(x)
+    y_pts = surrogate.predict_mean(x)
+    print(f"Does loaded_y_pt == y_pt? {jnp.all(loaded_y_pt == y_pts)}")
