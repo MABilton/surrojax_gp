@@ -11,7 +11,7 @@ from gp_utilities import chol_decomp
 np.random.seed(2)
 
 # Calls Scipy Optimise function to tune hyperparameters:
-def fit_hyperparameters(x_train, y_train, noisy_K, constraints, num_repeats=9):
+def fit_hyperparameters(x_train, y_train, noisy_K, constraints, num_repeats=3):
     # Create functions to compute gradient of covariance matrix wrt hyperparameters:
     K_grad_fun = jax.jit(jax.jacfwd(noisy_K, argnums=2)) 
     bounds, bounds_array, idx_2_key = create_bounds(constraints)

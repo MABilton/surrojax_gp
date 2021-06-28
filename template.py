@@ -1,4 +1,3 @@
-
 from gp_create import create_gp, save_gp
 
 def kernel(x_1, x_2, params):
