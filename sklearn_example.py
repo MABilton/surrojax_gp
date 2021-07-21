@@ -29,7 +29,7 @@ if __name__ == "__main__":
     Y = (f(X).ravel())
     Y = Y.reshape(len(Y),1)
     x =  jnp.atleast_2d(jnp.linspace(0, 10, 1000)).T
-    constraints = {"const": {">": 10**(-3)}, "length": {">": 10**(-1)}} # "noise":None
+    constraints = {"const": {">": 10**(-2), "<": 10**(2)}, "length": {">": 10**(-1), "<": 10**(1)}} # "noise":None
     surrogate = oed_gp.GP_Surrogate(kernel, X, Y, constraints)
     y = surrogate.predict(x)
     # Plotting: 
@@ -64,7 +64,9 @@ if __name__ == "__main__":
     dy = 0.5 + 1.0 * np.random.random(Y.shape)
     noise = np.random.normal(0, dy)
     Y += noise
-    constraints = {"const": {">": 10**(-3)}, "length": {">": 10**(-1)}, "noise":{">":10**(-3)}} 
+    constraints = {"const": {">": 10**(-2), "<": 10**(2)}, 
+                   "length": {">": 10**(-1), "<": 10**(1)}, 
+                   "noise":{">":10**(-3), "<":10**(2)}} 
     surrogate = oed_gp.GP_Surrogate(kernel, X, Y, constraints)
     x =  jnp.atleast_2d(jnp.linspace(0, 10, 1000)).T
     y = surrogate.predict(x)
