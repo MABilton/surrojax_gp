@@ -3,6 +3,8 @@ import jax.numpy as jnp
 from gp_class import GP_Surrogate
 
 def create_gp(kernel_func, x_train, y_train, constraints):
+    # Pre-process x_train and y_train shapes:
+    x_train, y_train = preprocess_x_and_y(x_train, y_train)
     # Create dictionary which stores all user-provided information:
     create_dict = {"kernel": kernel_func,
                    "kernel_name": kernel_func.__name__,
@@ -13,6 +15,15 @@ def create_gp(kernel_func, x_train, y_train, constraints):
     # Create Gaussian process:
     GP = GP_Surrogate(create_dict)
     return GP
+
+def preprocess_x_and_y(x_train, y_train):
+    x_train = jnp.atleast_2d(x_train.squeeze())
+    y_train = jnp.atleast_1d(y_train.squeeze())
+    assert y_train.ndim==1 and x_train.ndim==2
+    if x_train.shape[0] != y_train.size:
+        x_train = x_train.T
+    assert x_train.shape[0] == y_train.size
+    return (x_train, y_train)
 
 def load_gp(json_dir):
     # Attempt to load JSON file:
