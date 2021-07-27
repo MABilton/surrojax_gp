@@ -1,29 +1,32 @@
 import numpy as np
 import jax.numpy as jnp
-
-from gp_linearise import LinearisedModel
-
 from matplotlib import pyplot as plt
-
-import pickle
+from gp_linearise import LinearisedModel
 
 def kernel(x_1, x_2, params):
     return params["const"]*jnp.exp(-0.5*((x_1 - x_2)/params["length"])**2)
 
-if __name__ == "__main__":
-    # Import data from text file:
+def load_data(data_dir):
+    # Import data from text file; columns of data arranged as [angle, c10, disp]:
     training_data = np.loadtxt("beam_data_one_pt.txt")
-    # Note that columns of beam data arranged as: [angle, c10, disp]
-
     # Convert to Jax.numpy array:
-    training_x = jnp.array(training_data[:,0:-1])
-    training_y = training_data[:,-1]
+    x_train = jnp.array(training_data[:,0:-1])
+    y_train = training_data[:,-1]
+    return (x_train, y_train)
+
+if __name__ == "__main__":
+    # Load training data:
+    data_dir = "specify_data_dir_here"
+    x_train, y_train = load_data(data_dir)
+
+    # Specify constraints on parameters:
+    constraints = {"const": {">": 10**(-2), "<": 10**5},
+                   "length": {">": 10**(-1), "<": 10**2}}
 
     # Fit GP to w vs d data:
-    dim_2_linearise = [1]
-    constraints  = {"const":{">": 10**(-2), "<": 10**5}, "length":{">": 10**(-1), "<": 10**2}}
+    dim_2_linearise = [1] # List of array indices corresponding to 1st dimension of x_train
     ln_diag_constraints = {"const":{">": 10**(-2), "<": 10**3}, "length":{">": 10**(0), "<": 10**2}}
-    LM = LinearisedModel(training_x, training_y, dim_2_linearise, kernel, constraints, ln_diag_constraints)
+    LM = LinearisedModel(x_train, y_train, dim_2_linearise, kernel, constraints, ln_diag_constraints)
 
     # Plot cov vs d:
     plot_pts = 1000
