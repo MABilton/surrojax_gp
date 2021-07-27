@@ -23,7 +23,6 @@ class GP_Surrogate:
         self.K = create_K(self.kernel)
         self.cov_diag = create_cov_diag(self.kernel)
         noise_flag = True if "noise" in self.constraints else False
-        
         # If hyperparameters have not been fit:
         if "params" not in create_dict: 
             # Create function which adds noise or jitter to covariance matrix:
@@ -65,8 +64,8 @@ class GP_Surrogate:
         x_new = jnp.atleast_2d(x_new)
         k = self.compute_k(x_new) if k is None else k
         v = cho_solve((self.L, True), k)
-        var = self.cov_diag(x_new, self.params) - jnp.einsum("ij,ji->i", k.T, v) # jnp.sum(v*v, axis=0, keepdims=True)
-        var = (jax.ops.index_update(var, var<min_var, min_var))**(1/2)
+        var = self.cov_diag(x_new, self.params) - jnp.einsum("ij,ij->i", k, v) # jnp.sum(v*v, axis=0, keepdims=True)
+        var = jax.ops.index_update(var, var<min_var, min_var)
         return jnp.atleast_1d(var.squeeze())
 
     def predict_cov(self, x_new, k=None):

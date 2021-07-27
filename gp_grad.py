@@ -3,7 +3,7 @@ import jax.numpy as jnp
 from scipy.linalg import solve_triangular
 
 from gp_class import GP_Surrogate
-from gp_utilities import create_kernel_matrix_func, create_cov_diag_func
+from gp_utilities import create_K, create_cov_diag
 
 # order = list of same size as feature vector; i'th entry of order specifies order of differentiation
 def create_derivative_gp(GP, order=None):
@@ -31,8 +31,8 @@ class GP_Jac(GP_Surrogate):
         kernel_hess_diag = lambda x_1, x_2, params : jnp.diag(kernel_hess(x_1, x_2, params))
 
         # Vectorise functions:
-        self.kernel_jac = create_kernel_matrix_func(kernel_jac)
-        self.kernel_hess_diag = create_cov_diag_func(kernel_hess_diag)
+        self.kernel_jac = create_K(kernel_jac)
+        self.kernel_hess_diag = create_cov_diag(kernel_hess_diag)
 
     def predict_jac(self, x_new, k=None):
         k_jac = self.compute_k_jac(x_new)
@@ -44,6 +44,8 @@ class GP_Jac(GP_Surrogate):
         x_new = jnp.atleast_2d(x_new)
         if k_jac is None:
             k_jac = self.compute_k_jac(x_new)
+        print(k_jac.shape)
+        print(x_new.shape)
         mean_grad = self.predict_mean(x_new, k=k_jac)
         return mean_grad.squeeze().T
 
@@ -71,11 +73,11 @@ class GP_Grad(GP_Surrogate):
         self.order = order
 
         # Compute gradient of kernel we want to predict:
-        self.kernel_grad_both_input, self.kernel_grad_first_input = create_kernel_grad_fun(self.kernel, self.order)
+        self.kernel_grad_both, self.kernel_grad_first = create_kernel_grad_fun(self.kernel, self.order)
         
         # Perform relevant vectorisation on these functions:
-        self.K_grad = create_kernel_matrix_func(self.kernel_grad_both_input)
-        self.cov_diag_grad_func = create_cov_diag_func(self.kernel_grad_first_input)
+        self.K_grad = create_K(self.kernel_grad_both)
+        self.cov_diag_grad = create_cov_diag(self.kernel_grad_first)
 
     def predict_grad(self, x_new, k=None):
         k_grad = self.compute_k_grad(x_new)
@@ -95,7 +97,7 @@ class GP_Grad(GP_Surrogate):
         if k is None:
             k = self.compute_k_grad(x_new)
         v = solve_triangular(self.L, k, lower=True)
-        var = self.cov_diag_grad_func(x_new, x_new, self.params) -  jnp.sum(v*v, axis=0, keepdims=True)
+        var = self.cov_diag_grad(x_new, x_new, self.params) -  jnp.sum(v*v, axis=0, keepdims=True)
         var = jax.ops.index_update(var, var<min_var, min_var)
         return var.squeeze()
 
@@ -105,26 +107,50 @@ class GP_Grad(GP_Surrogate):
 # Helper function for GP_Grad __init__ method:
 def create_kernel_grad_fun(kernel, order):
     # Initialise gradient functions we're going to create:
-    kernel_grad_both, kernel_grad_first = [kernel], [kernel]
+    len_x = len(order)
+    kernel_grad_both, kernel_grad_first = [unpack_x_inputs(kernel, len_x)], [unpack_x_inputs(kernel, len_x)]
     # Create list of gradient functions:
     for dim, diff_order in enumerate(order):
         for i in range(diff_order):
             # Diff wrt first argument:
-            kernel_grad_first.append(diff_kernel(kernel_grad_first[-1], 0, dim)) 
+            kernel_grad_first.append(diff_kernel(kernel_grad_first[-1], 0, dim, len_x)) 
             # Diff wrt both arguments:
-            kernel_grad_both.append(diff_kernel(kernel_grad_both[-1], 0, dim))
-            kernel_grad_both.append(diff_kernel(kernel_grad_both[-1], 1, dim))
+            kernel_grad_both.append(diff_kernel(kernel_grad_both[-1], 0, dim, len_x))
+            kernel_grad_both.append(diff_kernel(kernel_grad_both[-1], 1, dim, len_x))
     # Function closures - functions now have copy of all required derivatve functions:
-    def kernel_grad_first_fun(x_1, x_2, params):
-        kernel_grads = kernel_grad_first
-        return kernel_grads[-1](x_1, x_2, params)
+    def kernel_grad_first_fun(x_1, x_2, params): 
+        assert x_1.ndim==1 and x_2.ndim==1
+        assert x_1.size==len_x and x_2.size==len_x
+        x = jnp.append(x_1, x_2)
+        assert x.ndim==1
+        return kernel_grad_first[-1](params, *x)
     def kernel_grad_both_fun(x_1, x_2, params):
-        kernel_grads = kernel_grad_both
-        return kernel_grads[-1](x_1, x_2, params)
+        assert x_1.ndim==1 and x_2.ndim==1
+        assert x_1.size==len_x and x_2.size==len_x
+        x = jnp.append(x_1, x_2)
+        assert x.ndim==1
+        return kernel_grad_both[-1](params, *x)
     # Return grad functions:
     return (kernel_grad_both_fun, kernel_grad_first_fun)
 
 # Helper function required - or else kernel_grad_first[-1] leads to infinite recursion
-def diff_kernel(kernel, diff_arg, dim):
-    diff_fun = lambda x_1, x_2, params: jax.grad(kernel, argnums=diff_arg)(x_1, x_2, params)[dim]
+def diff_kernel(kernel, diff_arg, dim, len_x):
+    diff_idx = len_x*diff_arg + dim
+    diff_fun = lambda params, *x: jax.grad(kernel, argnums=diff_idx)(params, *x)
     return diff_fun
+
+# Function to unpack x input of kernel function:
+# From: (x_1, x_2, params) To: (x_11, x_12, ... x_1N, x_21, x_22, ..., x_2N, params)
+def unpack_x_inputs(kernel_func, len_x):
+    def unpacked_func(params, *x):
+        assert x.ndim==1
+        x_1, x_2 = jnp.array(x[0:len_x]), jnp.array(x[len_x:])
+        return kernel_func(x_1, x_2, params)
+    return unpacked_func
+# Function to repack x input of kernel function:
+# From: (x_11, x_12, ... x_1N, x_21, x_22, ..., x_2N, params) To: (x_1, x_2, params)
+def repack_x_inputs(kernel_func, len_x):
+    def repacked_func(x_1, x_2, params):
+
+        return kernel_func()
+    return repacked_func

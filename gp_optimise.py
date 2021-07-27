@@ -19,7 +19,8 @@ def fit_hyperparameters(x_train, y_train, noisy_K, constraints, num_repeats=5, j
     K_grad_fun = create_K_grad_fun(noisy_K)
     # Jit functions if requested:
     if jit_flag:
-        noisy_K, K_grad_fun = jax.jit(noisy_K), jax.jit(K_grad_fun)
+        noisy_K = jax.jit(noisy_K) 
+        K_grad_fun = jax.jit(K_grad_fun)
     # Create bounds to pass to minimize and to compute initial x guess:
     bounds, bounds_array = create_bounds(constraints)
     # Create loss and gradient of loss function to minimise:
@@ -55,6 +56,7 @@ def create_loss_and_grad(x_train, y_train, noisy_K, K_grad_fun, constraints):
         K_grad_vals = K_grad_fun(x_train, param_dict)
         loss = 0.5*jnp.einsum("i,i->", y_train, alpha) \
              + (jnp.log(jnp.diag(L_val))).sum() + loss_constant
+        print(loss)
         alpha_outer = jnp.einsum("i,j->ij", alpha, alpha)
         loss_grad = -0.5*jnp.einsum("ik,jki->j", alpha_outer, K_grad_vals) + \
                      0.5*jnp.einsum("kii->k", cho_solve_vmap((L_val, True), K_grad_vals))
@@ -68,7 +70,7 @@ def create_loss_and_grad(x_train, y_train, noisy_K, K_grad_fun, constraints):
     return loss_and_grad_wrapper
 
 def create_K_grad_fun(noisy_K):
-    K_grad = jax.jacrev(noisy_K, argnums=1)
+    K_grad = jax.jacfwd(noisy_K, argnums=1)
     def create_grad_matrix(K_grad_dict):
         K_grad_array = []
         for key in sorted(K_grad_dict.keys()):
@@ -79,6 +81,7 @@ def create_K_grad_fun(noisy_K):
     def K_grad_fun(x_train, param_dict):
         K_grad_dict = K_grad(x_train, param_dict)
         K_grad_array = create_grad_matrix(K_grad_dict)
+        # Calling psutil.cpu_precent() for 4 seconds
         return K_grad_array
     return K_grad_fun
 
