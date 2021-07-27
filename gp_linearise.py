@@ -1,5 +1,4 @@
-
-from oed_gp import GP_Surrogate
+from gp_create import create_gp
 from gp_utilities import chol_decomp
 
 from math import factorial
@@ -13,9 +12,9 @@ class LinearisedModel:
         # Linearise data:
         self.training_d, self.training_w, self.diag_list, off_diag_list = linearise_data(x, y, dim_2_lin, intercept_flag)
         # Create GP surrogate with training data:
-        self.w_surrogate = GP_Surrogate(kernel, self.training_d, self.training_w[:,0], constraints)
-        self.b_surrogate = GP_Surrogate(kernel, self.training_d, self.training_w[:,1], constraints)
-        self.ln_diag_surrogate = GP_Surrogate(kernel, self.training_d, jnp.log(self.diag_list), ln_diag_constraints) # Assumed only one entry
+        self.w_surrogate = create_gp(kernel, self.training_d, self.training_w[:,0], constraints)
+        self.b_surrogate = create_gp(kernel, self.training_d, self.training_w[:,1], constraints)
+        self.ln_diag_surrogate = create_gp(kernel, self.training_d, jnp.log(self.diag_list), ln_diag_constraints) # Assumed only one entry
 
     def predict_weights(self, d):
         w = self.w_surrogate.predict(d)

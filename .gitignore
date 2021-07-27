@@ -1,1 +1,6 @@
 __pycache*
+.vscode
+*.png
+*.json
+*.pkl
+Images

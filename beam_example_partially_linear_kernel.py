@@ -5,10 +5,11 @@ import matplotlib.pyplot as plt
 from gp_create import create_gp, save_gp, load_gp
 
 def kernel(x_1, x_2, params):
-    lengths = jnp.array([params[f"length_{i}"] for i in range(2)])
-    inv_lengths = jnp.diag(lengths**(-1))
-    ln_k_d = -0.5*(x_1 - x_2).T @ inv_lengths @ (x_1 - x_2) 
-    return params["const"]*jnp.exp(ln_k_d)
+    # Dot product kernel for theta (i.e. linearise in terms of theta = c10);
+    # Squared exponential kernel for d (i.e. non-linear in terms of angle, x, y and z):
+    k_theta = params["const_0"]*(x_1[0]-params["const_1"])*(x_2[0]-params["const_1"]) + params["const_2"]
+    k_d = params["const_3"]*jnp.exp(-0.5*((x_1[1] - x_2[1])/params["length"])**2)
+    return k_theta + k_d
 
 def load_data(data_dir):
     # Import data from text file:
@@ -39,9 +40,9 @@ if __name__ == "__main__":
     # Load training data:
     data_dir = "beam_data_one_pt.txt"
     x_train, y_train =  load_data(data_dir)
-    constraints = {"length_0": {">": 10**-1, "<": 10**3}, 
-                   "length_1": {">": 10**-1, "<": 10**3}, 
-                   "const": {">": 10**-1, "<": 10**4}}
+    constraints  = {f"const_{i}": {">": 10**(-3), "<": 10**3} for i in range(4)} 
+    constraints["length"] = {">": 10**(-1), "<": 10**2}
+    constraints["noise"] = {">": 10**(-1), "<": 10**3}
     surrogate = create_gp(kernel, x_train, y_train, constraints)
 
     # Plot surrogate model surface:
@@ -50,19 +51,7 @@ if __name__ == "__main__":
     x = jnp.vstack((theta_grid.flatten(), d_grid.flatten())).T
     y_pts = surrogate.predict_mean(x)
     y_grid = y_pts.reshape(d_pts.size,theta_pts.size)
-    plot_gp_surface(d_grid, theta_grid, y_grid, save_name="nonlinear_kernel")
-
-    # Plot surface of training data:
-    d_pts, theta_pts, y_pts = x_train[:,1], x_train[:,0], y_train
-    theta_grid, d_grid, y_grid = theta_pts.reshape(10,10), d_pts.reshape(10,10), y_pts.reshape(10,10)      
-    plot_gp_surface(d_grid, theta_grid, y_grid, save_name="training_data")
+    plot_gp_surface(d_grid, theta_grid, y_grid, save_name="partially_linear_kernel")
 
     # Save Gaussian process model:
-    save_gp(surrogate, "nonlinear_kernel_gp")
-
-    # Attempt to reload GP model:
-    loaded_gp = load_gp("nonlinear_kernel_gp.json")
-    # Check to make sure predictions are the same as before:
-    loaded_y_pt = loaded_gp.predict_mean(x)
-    y_pts = surrogate.predict_mean(x)
-    print(f"Does loaded_y_pt == y_pt? {jnp.all(loaded_y_pt == y_pts)}")
+    save_gp(surrogate, "partially_linear_kernel_gp")
