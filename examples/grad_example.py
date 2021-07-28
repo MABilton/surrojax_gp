@@ -1,9 +1,11 @@
+import sys
+sys.path.append('../gp')
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
-from gp_oed_surrogate.gp_create import create_gp
-from gp_oed_surrogate.gp_grad_2 import create_derivative_gp
+from gp_create import create_gp
+from gp_grad import create_derivative_gp
 
 def kernel(x_1, x_2, params):
     lengths = jnp.array([params[f"length_{i}"] for i in range(2)])
