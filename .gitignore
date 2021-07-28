@@ -1,6 +1,5 @@
-__pycache*
+*__pycache*
 .vscode
 *.png
 *.json
 *.pkl
-Images
