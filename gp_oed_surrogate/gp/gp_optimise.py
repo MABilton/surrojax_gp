@@ -5,13 +5,13 @@ import numpy as np
 from numpy import random
 from math import pi, inf
 from scipy.optimize import minimize, approx_fprime
-from gp_utilities import chol_decomp
+from .gp_utilities import chol_decomp
 
 # For reproducability, set random seed:
 random.seed(2)
 
 # Calls Scipy Optimise function to tune hyperparameters:
-def fit_hyperparameters(x_train, y_train, noisy_K, constraints, num_repeats=5, jit_flag=True):
+def fit_hyperparameters(x_train, y_train, noisy_K, constraints, num_repeats=2, jit_flag=True):
     # Create functions to compute gradient of covariance matrix wrt hyperparameters:
     K_grad_fun = create_K_grad_fun(noisy_K)
     # Jit functions if requested:

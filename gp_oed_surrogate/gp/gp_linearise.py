@@ -1,8 +1,8 @@
 from math import factorial
 import jax.scipy.linalg as jlinalg
 import jax.numpy as jnp
-from gp_create import create_gp
-from gp_utilities import chol_decomp
+from .gp_create import create_gp
+from .gp_utilities import chol_decomp
 
 class LinearisedModel:
     def __init__(self, x, y, dim_2_lin, kernel, constraints, ln_diag_constraints, intercept_flag=True):

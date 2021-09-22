@@ -1,7 +1,9 @@
+import sys
+sys.path.append(r"../")
 import numpy as np
 import jax.numpy as jnp
 from matplotlib import pyplot as plt
-from gp_oed_surrogate.gp_linearise import LinearisedModel
+from gp.gp_linearise import LinearisedModel
 
 def kernel(x_1, x_2, params):
     return params["const"]*jnp.exp(-0.5*((x_1 - x_2)/params["length"])**2)

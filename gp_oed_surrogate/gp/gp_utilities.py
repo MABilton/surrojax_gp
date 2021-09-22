@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 from jax.scipy.linalg import cholesky, cho_solve
-from nearest_pd import nearestPD
+from .nearest_pd import nearestPD
 
 def compute_L_and_alpha(noisy_K, x_train, y_train, params):
     train_K = noisy_K(x_train, params)

@@ -1,8 +1,8 @@
 import jax
 import jax.numpy as jnp
 from jax.scipy.linalg import cho_solve
-from gp_utilities import create_K, create_cov_diag, create_noisy_K, compute_L_and_alpha
-from gp_optimise import fit_hyperparameters
+from .gp_utilities import create_K, create_cov_diag, create_noisy_K, compute_L_and_alpha
+from .gp_optimise import fit_hyperparameters
 
 # y_train = (num_samples) - learning a single function!
 # x_train.size = (num_samples, num_features)
@@ -11,8 +11,6 @@ from gp_optimise import fit_hyperparameters
 class GP_Surrogate:
     def __init__(self, create_dict):
         # Attributes to store:
-        self.kernel_file = create_dict["kernel_file"]
-        self.kernel_name = create_dict["kernel_name"]
         self.kernel = create_dict["kernel"]
         self.x_train = create_dict["x_train"]
         self.y_train = create_dict["y_train"]
@@ -42,16 +40,15 @@ class GP_Surrogate:
         else:
             self.L, self.alpha = create_dict["L"], create_dict["alpha"]
 
-    def predict(self, x_new, cov="diag"):
+    def predict(self, x_new, return_cov=False, return_std=False):
+        output_dict = {}
         k = self.compute_k(x_new)
-        mean = self.predict_mean(x_new, k=k)
-        if cov.lower()=="diag":
-            cov_out = self.predict_cov_diag(x_new, k=k)
-        elif cov.lower()=="full":
-            cov_out = self.predict_cov(x_new, k=k)
-        else:
-            cov_out = None
-        return (mean, cov_out)
+        output_dict['mean'] = self.predict_mean(x_new, k=k)
+        if return_std:
+            output_dict['std'] = self.predict_std(x_new, k=k)
+        if return_cov:
+            output_dict['cov'] = self.predict_cov(x_new, k=k)
+        return output_dict
 
     def predict_mean(self, x_new, k=None):
         x_new = jnp.atleast_2d(x_new)
@@ -59,7 +56,7 @@ class GP_Surrogate:
         mean = jnp.einsum("ji,j->i", k, self.alpha)
         return mean.reshape((mean.size,1))
 
-    def predict_cov_diag(self, x_new, k=None, min_var=10**-9):
+    def predict_std(self, x_new, k=None, min_var=10**-9):
         x_new = jnp.atleast_2d(x_new)
         k = self.compute_k(x_new) if k is None else k
         v = cho_solve((self.L, True), k)
