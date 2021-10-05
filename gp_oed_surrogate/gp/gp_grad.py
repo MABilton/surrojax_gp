@@ -9,6 +9,8 @@ def create_derivative_gp(GP, idx_2_diff):
     # TODO: Input checks:
     return GP_Grad(GP, idx_2_diff)
 
+# [{[] : 2}]
+
 # grad_order = LIST of tuples -> each tuple is (list_of_x_indices, order_of_diff)
 # Create two functions: One where kernel diff wrt first arg, other where diff wrt both args
 class GP_Grad(GP_Surrogate):

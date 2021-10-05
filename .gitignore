@@ -1,5 +1,6 @@
 *__pycache*
-.vscode
+*vscode*
 *.png
 *.json
 *.pkl
+*.ipynb_checkpoints

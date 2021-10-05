@@ -1,8 +1,8 @@
 import jax
 import jax.numpy as jnp
-from jax.scipy.linalg import cho_solve
 from .gp_utilities import create_K, create_cov_diag, create_noisy_K, compute_L_and_alpha
 from .gp_optimise import fit_hyperparameters
+from .prediction import create_predict_method, create_grad_key
 
 # y_train = (num_samples) - learning a single function!
 # x_train.size = (num_samples, num_features)
@@ -10,11 +10,15 @@ from .gp_optimise import fit_hyperparameters
 
 class GP_Surrogate:
     def __init__(self, create_dict):
+
         # Attributes to store:
         self.kernel = create_dict["kernel"]
         self.x_train = create_dict["x_train"]
         self.y_train = create_dict["y_train"]
         self.constraints = create_dict["constraints"]
+        self.x_dim = self.x_train.shape[1]
+        self.y_dim = 1
+        self.train_size = self.x_train.shape[0]
     
         # Create functions to compute covariance matrix:
         self.K = create_K(self.kernel)
@@ -40,36 +44,22 @@ class GP_Surrogate:
         else:
             self.L, self.alpha = create_dict["L"], create_dict["alpha"]
 
-    def predict(self, x_new, return_cov=False, return_std=False):
-        output_dict = {}
-        k = self.compute_k(x_new)
-        output_dict['mean'] = self.predict_mean(x_new, k=k)
-        if return_std:
-            output_dict['std'] = self.predict_std(x_new, k=k)
-        if return_cov:
-            output_dict['cov'] = self.predict_cov(x_new, k=k)
+        # Initialise dictionary to store prediction functions:
+        self.predict_functions = {}
+
+    def predict(self, x_new, return_var=True, return_cov=False, grad=None):
+
+        # Create key associated with requested gradient:
+        grad_key = create_grad_key(grad)
+
+        # Check if we have the requested gradient function - if not, create it:
+        if grad_key not in self.predict_functions:
+            self.predict_functions[grad_key] = create_predict_method(self, grad=grad)
+
+        # Perform prediction:
+        output_dict = self.predict_functions[grad_key](x_new, return_var, return_cov)
+
         return output_dict
 
-    def predict_mean(self, x_new, k=None):
-        x_new = jnp.atleast_2d(x_new)
-        k = self.compute_k(x_new) if k is None else k
-        mean = jnp.einsum("ji,j->i", k, self.alpha)
-        return mean.reshape((mean.size,1))
-
-    def predict_std(self, x_new, k=None, min_var=10**-9):
-        x_new = jnp.atleast_2d(x_new)
-        k = self.compute_k(x_new) if k is None else k
-        v = cho_solve((self.L, True), k)
-        var = self.cov_diag(x_new, self.params) - jnp.einsum("ij,ij->j", k, v) # jnp.sum(v*v, axis=0, keepdims=True)
-        var = jax.ops.index_update(var, var<min_var, min_var)
-        return var.reshape((var.size,1))
-
-    def predict_cov(self, x_new, k=None):
-        if k is None:
-            k = self.compute_k(x_new)
-        K_full = self.K(x_new, x_new)
-        cov = K_full - k.T @ self.L
-        return cov
-
     def compute_k(self, x_new):
-        return self.K(self.x_train, x_new, self.params)
+        return self.K(self.x_train, x_new, self.params).reshape(self.train_size, -1)
