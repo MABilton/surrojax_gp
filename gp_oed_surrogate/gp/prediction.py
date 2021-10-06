@@ -1,8 +1,10 @@
 import jax
 import jax.numpy as jnp
 from jax.scipy.linalg import cho_solve
-from functools import reduce
+from functools import reduce, update_wrapper
 from operator import mul
+from types import FunctionType
+from inspect import signature
 
 MIN_VAR = 1e-9
 
@@ -50,20 +52,14 @@ def create_kernel_funs(gp_obj, grad):
     
     # Compute gradients if required:
     if grad is not None:
-        kernel_1, kernel_01, shape_1, shape_01 = create_K_grad(gp_obj, grad)
+        kernel_1, kernel_01_diag, kernel_01 = create_K_grad(gp_obj, grad)
     else:
-        kernel_1 = kernel_01 = gp_obj.kernel
-        shape_1 = shape_01 = []
-        
-    # Ensure correct output structure:
-    kernel_1_out = lambda x_1, x_2, params : kernel_1(x_1, x_2, params).reshape(shape_1)
-    kernel_01_diag_out = lambda x_1, x_2, params : kernel_01(x_1, x_2, params).reshape(shape_1)
-    kernel_01_out = lambda x_1, x_2, params : kernel_01(x_1, x_2, params).reshape(shape_01)
+        kernel_1 = kernel_01_diag = kernel_01 = gp_obj.kernel
     
     # Vectorise:
-    K_1 = vectorise_kernel(kernel_1_out)
-    K_01_diag = vectorise_kernel(kernel_01_diag_out, diag_only=True)
-    K_01 = vectorise_kernel(kernel_01_out)
+    K_1 = vectorise_kernel(kernel_1)
+    K_01_diag = vectorise_kernel(kernel_01_diag, diag_only=True)
+    K_01 = vectorise_kernel(kernel_01)
     
     return (K_1, K_01_diag, K_01)
 
@@ -75,6 +71,13 @@ def vectorise_kernel(kernel, diag_only=False):
     return kernel_vmap
 
 def create_K_grad(gp_obj, grad):
+
+    # Initialise the kernel functions we've creating:
+    kernel_1 = kernel_01_diag = kernel_01 = gp_obj.kernel
+    # kernel_1, kernel_01_diag, kernel_01 = deepcopy_fun(gp_obj.kernel, num_copies=3)
+
+    # Keep track of ouput shape:
+    grad_1_shape, grad_01_shape = [], []
 
     for grad_i in grad:
 
@@ -90,29 +93,58 @@ def create_K_grad(gp_obj, grad):
         # Convert these to Jax arrays:
         grad_idx = jnp.array(grad_idx).astype(jnp.int32) 
         nongrad_idx = jnp.array(nongrad_idx).astype(jnp.int32)
-
-        # Restructure call signature:
-        kernel_1 = unpack_args(gp_obj.kernel, grad_idx, nongrad_idx)
-        kernel_01 = unpack_args(gp_obj.kernel, grad_idx, nongrad_idx)
         
-        # Keep track of ouput shape:
-        grad_1_shape, grad_01_shape = [], []
+        # Unpack call structure of kernel functions:
+        kernel_1 = unpack_args(kernel_1, grad_idx, nongrad_idx)
+        kernel_01_diag = unpack_args(kernel_01_diag, grad_idx, nongrad_idx)
+        kernel_01 = unpack_args(kernel_01, grad_idx, nongrad_idx)
 
         # Perform differentiation:
-        for _ in range(grad_order):
+        for i in range(grad_order):
             # Note that the 1st arg = components we're diffing wrt
             kernel_1 = jax.jacrev(kernel_1, argnums=1)
-            kernel_01 = jax.jacfwd(jax.jacrev(kernel_01, argnums=1), argnums=0) 
+            kernel_01_diag = jax.jacrev(jax.jacrev(kernel_01_diag, argnums=1), argnums=0) 
+            kernel_01 = jax.jacrev(jax.jacrev(kernel_01, argnums=1), argnums=0) 
+
+            # Extract diagonal elements for diagonal kernel:
+            kernel_01_diag = create_diagonal_kernel(kernel_01_diag)
+            
+            # Need to extract diagonal element if i>0, since we'll be computing cross-derivatives at this point:
+            if i>0:
+                kernel_1 = create_diagonal_kernel(kernel_1)
+
             # Update shape:
             grad_1_shape += [len(grad_idx)]
             grad_01_shape += [len(grad_idx), len(grad_idx)]
         
         # Repack call signature 'back to normal':
         kernel_1 = repack_args(kernel_1, grad_idx, nongrad_idx)
+        kernel_01_diag = repack_args(kernel_01_diag, grad_idx, nongrad_idx)
         kernel_01 = repack_args(kernel_01, grad_idx, nongrad_idx)
 
-    return (kernel_1, kernel_01, grad_1_shape, grad_01_shape)
-    
+    # Now ensure correct output shape:
+    kernel_1 = reshape_fun(kernel_1, grad_1_shape)
+    kernel_01_diag = reshape_fun(kernel_01_diag, grad_1_shape)
+    kernel_01 = reshape_fun(kernel_01, grad_01_shape)
+
+    return (kernel_1, kernel_01_diag, kernel_01)
+
+def reshape_fun(fun, output_shape):
+    fun_reshape = lambda *vargs : fun(*vargs).reshape(output_shape)
+    return fun_reshape
+
+
+# def deepcopy_fun(f, num_copies=1):
+#     fun_copies = []
+#     for _ in range(num_copies):
+#         g = FunctionType(f.__code__, f.__globals__, name=f.__name__,
+#                          argdefs=f.__defaults__,
+#                          closure=f.__closure__)
+#         g = update_wrapper(g, f)
+#         g.__kwdefaults__ = f.__kwdefaults__
+#         fun_copies.append(g)
+#     return fun_copies if num_copies>1 else fun_copies[0]
+
 def unpack_args(packed_fun, grad_idx, nongrad_idx):
     
     idx_order = jnp.concatenate((grad_idx, nongrad_idx))
@@ -126,6 +158,15 @@ def unpack_args(packed_fun, grad_idx, nongrad_idx):
         return packed_fun(x_1, x_2, params)
     
     return unpacked_fun
+
+def create_diagonal_kernel(kernel):
+
+    def kernel_diag(*vargs):
+        k = kernel(*vargs)
+        k_diag = jnp.diagonal(k, axis1=-2, axis2=-1)
+        return k_diag
+
+    return kernel_diag
 
 def repack_args(unpacked_fun, grad_idx, nongrad_idx):
     def unpack_x(x):
