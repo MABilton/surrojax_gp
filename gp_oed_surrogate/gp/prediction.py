@@ -38,15 +38,32 @@ def create_predict_method(gp_obj, grad=None):
         if return_cov:
             k_01 = K(x_new, x_new)
             v = cho_solve((self.L, True), k_1)
-            cov = k_01 - jnp.einsum("ki...,kj...->ij...", k_1, v)
-            output_dict['cov'] = jax.ops.index_update(cov, (cov<MIN_VAR) & jnp.identity(x_new.shape[0]), MIN_VAR)
+            output_dict['cov'] = k_01 - jnp.einsum("ki...,kj...->ij...", k_1, v)
 
+        output_dict = ensure_positivevar(output_dict)
+        
         return output_dict
 
     # Associate this newly-defined method with our GP object:
     predict_method = predict_method.__get__(gp_obj)
 
     return predict_method
+
+def ensure_positivevar(output_dict):
+
+    if 'var' in output_dict:
+        var = output_dict['var']
+        output_dict['var'] = jax.ops.index_update(var, var<MIN_VAR, MIN_VAR) 
+    
+    if 'cov' in output_dict:
+        cov = output_dict['cov']
+        cov_shape = cov.shape
+        cov_axes = list(len(cov_shape))
+        diag_mask = jnp.broadcast_to(jnp.identity(cov_shape[0:2]), reversed(cov_shape))
+        diag_mask = jnp.moveaxis(diag_mask, cov_axes, reversed(cov_axes))
+        output_dict['cov'] = jax.ops.index_update(var, (cov<MIN_VAR) & diag_mask, MIN_VAR) 
+
+    return output_dict
 
 def create_kernel_funs(gp_obj, grad):
     
