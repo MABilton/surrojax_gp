@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-   name='gp_oed_surrogate',
+   name='surrojax_gp',
    version='0.0.0',
    author='Matthew Bilton',
    author_email='Matt.A.Bilton@gmail.com',
