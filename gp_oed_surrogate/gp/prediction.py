@@ -150,7 +150,6 @@ def reshape_fun(fun, output_shape):
     fun_reshape = lambda *vargs : fun(*vargs).reshape(output_shape)
     return fun_reshape
 
-
 # def deepcopy_fun(f, num_copies=1):
 #     fun_copies = []
 #     for _ in range(num_copies):
