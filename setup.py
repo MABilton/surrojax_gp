@@ -9,9 +9,9 @@ setup(
    packages=find_packages(exclude=('tests', 'examples')),
    url="https://github.com/MABilton/gp_oed_surrogate",
    install_requires=[
-      'jax>=0.2.19',
-      'jaxlib>=0.1.69',
-      'numpy>=1.19.5',
-      'scipy>=1.4.1'
+      'jax==0.2.25',
+      'jaxlib==0.1.75',
+      'numpy~=1.19',
+      'scipy~=1.4'
       ]
 )

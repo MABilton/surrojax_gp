@@ -1,0 +1,7 @@
+Metadata-Version: 2.1
+Name: surrojax-gp
+Version: 0.0.0
+Home-page: https://github.com/MABilton/gp_oed_surrogate
+Author: Matthew Bilton
+Author-email: Matt.A.Bilton@gmail.com
+Requires-Python: >=3.7.12
