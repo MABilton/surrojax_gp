@@ -1,5 +1,5 @@
 
-# class MultipleOutputGP:
+# class ArrayGP:
 
 #     def __init__(self, crosskernel, *gp_list, **gp_dict):
         
